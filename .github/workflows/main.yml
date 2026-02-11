@@ -8,11 +8,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # armv7 matches 'armv8l' (32-bit); aarch64 is for 64-bit Termux
+        # armv7 for your 'armv8l' (32-bit); aarch64 for 64-bit devices
         target: [armv7-linux-androideabi, aarch64-linux-android]
     
     steps:
-      - name: Checkout your fork
+      - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -28,13 +28,47 @@ jobs:
         with:
           target: ${{ matrix.target }}
 
-      - name: Install Android NDK r26b
+      - name: Install Android NDK r27d
         run: |
-          wget https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
-          unzip -q android-ndk-r26b-linux.zip
-          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r26b" >> $GITHUB_ENV
+          wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+          unzip -q android-ndk-r27d-linux.zip
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r27d" >> $GITHUB_ENV
 
       - name: Build libsignal-jni
+        run: |
+          # Install cross-compilation tool
+          cargo install cargo-ndk
+          
+          # Clone native library source
+          git clone https://github.com/signalapp/libsignal.git
+          cd libsignal/java
+          
+          # Cross-compile for the specific Android target
+          cargo ndk -t ${{ matrix.target }} build --release -p libsignal-jni
+          
+          # Move result to root for the Java build to find
+          cp ../target/${{ matrix.target }}/release/libsignal_jni.so ../../libsignal_jni.so
+
+      - name: Build signal-cli and Inject JNI
+        run: |
+          # Build the Java distribution
+          ./gradlew installDist
+          
+          # Find the client jar (v0.13+ naming convention)
+          JAR_FILE=$(ls build/install/signal-cli/lib/libsignal-client-*.jar | head -n 1)
+          
+          # Inject the compiled Android .so file into the JAR
+          zip -uj "$JAR_FILE" libsignal_jni.so
+          
+          # Package the final Termux-ready folder
+          cd build/install
+          tar -czf ../../signal-cli-termux-${{ matrix.target }}.tar.gz signal-cli/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-${{ matrix.target }}
+          path: signal-cli-termux-${{ matrix.target }}.tar.gz      - name: Build libsignal-jni
         run: |
           # We need cargo-ndk to handle the cross-compilation linking
           cargo install cargo-ndk
