@@ -8,14 +8,12 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # armv7 for your 'armv8l' (32-bit); aarch64 for 64-bit devices
+        # armv7-linux-androideabi is the one you need for armv8l
         target: [armv7-linux-androideabi, aarch64-linux-android]
     
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4
@@ -24,9 +22,13 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Rust
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
         with:
-          target: ${{ matrix.target }}
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
 
       - name: Install Android NDK r27d
         run: |
@@ -36,31 +38,27 @@ jobs:
 
       - name: Build libsignal-jni
         run: |
-          # Install cross-compilation tool
-          cargo install cargo-ndk
-          
           # Clone native library source
           git clone https://github.com/signalapp/libsignal.git
           cd libsignal/java
           
-          # Cross-compile for the specific Android target
+          # Now that the target is explicitly installed, this won't fail
           cargo ndk -t ${{ matrix.target }} build --release -p libsignal-jni
           
-          # Move result to root for the Java build to find
+          # Move result to root
           cp ../target/${{ matrix.target }}/release/libsignal_jni.so ../../libsignal_jni.so
 
-      - name: Build signal-cli and Inject JNI
+      - name: Build signal-cli and Patch Jar
         run: |
-          # Build the Java distribution
           ./gradlew installDist
           
-          # Find the client jar (v0.13+ naming convention)
+          # Find the specific jar file 
           JAR_FILE=$(ls build/install/signal-cli/lib/libsignal-client-*.jar | head -n 1)
           
           # Inject the compiled Android .so file into the JAR
           zip -uj "$JAR_FILE" libsignal_jni.so
           
-          # Package the final Termux-ready folder
+          # Package the final folder
           cd build/install
           tar -czf ../../signal-cli-termux-${{ matrix.target }}.tar.gz signal-cli/
 
