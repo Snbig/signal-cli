@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # armv7-linux-androideabi is the one you need for armv8l
+        # armv7 for your 'armv8l'; aarch64 for standard 64-bit
         target: [armv7-linux-androideabi, aarch64-linux-android]
     
     steps:
@@ -21,11 +21,11 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
 
-      - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-          targets: ${{ matrix.target }}
+      - name: Install Rust Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup target add ${{ matrix.target }}
+          rustup default stable
 
       - name: Install cargo-ndk
         run: cargo install cargo-ndk
@@ -36,29 +36,21 @@ jobs:
           unzip -q android-ndk-r27d-linux.zip
           echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r27d" >> $GITHUB_ENV
 
-      - name: Build libsignal-jni
+      - name: Build Native libsignal-jni
         run: |
-          # Clone native library source
           git clone https://github.com/signalapp/libsignal.git
           cd libsignal/java
-          
-          # Now that the target is explicitly installed, this won't fail
+          # Using --release is critical for performance in Termux
           cargo ndk -t ${{ matrix.target }} build --release -p libsignal-jni
-          
-          # Move result to root
           cp ../target/${{ matrix.target }}/release/libsignal_jni.so ../../libsignal_jni.so
 
       - name: Build signal-cli and Patch Jar
         run: |
           ./gradlew installDist
-          
-          # Find the specific jar file 
+          # Find the client jar - names can change slightly between versions
           JAR_FILE=$(ls build/install/signal-cli/lib/libsignal-client-*.jar | head -n 1)
-          
-          # Inject the compiled Android .so file into the JAR
           zip -uj "$JAR_FILE" libsignal_jni.so
           
-          # Package the final folder
           cd build/install
           tar -czf ../../signal-cli-termux-${{ matrix.target }}.tar.gz signal-cli/
 
