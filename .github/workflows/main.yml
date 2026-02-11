@@ -1,7 +1,6 @@
-name: Build signal-cli for Termux (Fork)
+name: Build signal-cli for Termux
 on: 
   push:
-    branches: [ master, main ]
   workflow_dispatch:
 
 jobs:
@@ -9,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # armv7 handles 'armv8l' (32-bit); aarch64 is for standard 64-bit Termux
+        # armv7 matches 'armv8l' (32-bit); aarch64 is for 64-bit Termux
         target: [armv7-linux-androideabi, aarch64-linux-android]
     
     steps:
@@ -17,7 +16,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          submodules: recursive
 
       - name: Set up JDK 25
         uses: actions/setup-java@v4
@@ -26,15 +24,50 @@ jobs:
           distribution: 'temurin'
 
       - name: Set up Rust
-        uses: actions/setup-rust@v1
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           target: ${{ matrix.target }}
 
-      - name: Install Android NDK r27d
+      - name: Install Android NDK r26b
         run: |
-          NDK_VER=r27d
-          wget https://dl.google.com/android/repository/android-ndk-${NDK_VER}-linux.zip
-          unzip -q android-ndk-${NDK_VER}-linux.zip
+          wget https://dl.google.com/android/repository/android-ndk-r26b-linux.zip
+          unzip -q android-ndk-r26b-linux.zip
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r26b" >> $GITHUB_ENV
+
+      - name: Build libsignal-jni
+        run: |
+          # We need cargo-ndk to handle the cross-compilation linking
+          cargo install cargo-ndk
+          
+          # Clone the native library source
+          git clone https://github.com/signalapp/libsignal.git
+          cd libsignal/java
+          
+          # Build the JNI library for the target architecture
+          cargo ndk -t ${{ matrix.target }} build --release -p libsignal-jni
+          
+          # Move the library to a predictable location
+          cp ../target/${{ matrix.target }}/release/libsignal_jni.so ../../libsignal_jni.so
+
+      - name: Build signal-cli and Patch Jar
+        run: |
+          ./gradlew installDist
+          
+          # Find the specific jar file that needs the native library
+          JAR_FILE=$(ls build/install/signal-cli/lib/libsignal-client-*.jar | head -n 1)
+          
+          # Inject the .so file into the jar so it's found at runtime
+          zip -uj "$JAR_FILE" libsignal_jni.so
+          
+          # Create the final archive
+          cd build/install
+          tar -czf ../../signal-cli-termux-${{ matrix.target }}.tar.gz signal-cli/
+
+      - name: Upload Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-${{ matrix.target }}
+          path: signal-cli-termux-${{ matrix.target }}.tar.gz          unzip -q android-ndk-${NDK_VER}-linux.zip
           echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-${NDK_VER}" >> $GITHUB_ENV
 
       - name: Build native libsignal-jni
