@@ -5,7 +5,71 @@ on:
 
 jobs:
   build:
+    runs-on: name: Build signal-cli for Termux (Gradle-Native)
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # armv7-linux-androideabi is for your armv8l (32-bit)
+        target: [armv7-linux-androideabi]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+
+      # FIX: Manually installing the Rust target and the NDK linker
+      - name: Setup Rust for Android
+        run: |
+          rustup target add ${{ matrix.target }}
+          cargo install cargo-ndk
+
+      - name: Install Android NDK r27d
+        run: |
+          wget -q https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+          unzip -q android-ndk-r27d-linux.zip
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-r27d" >> $GITHUB_ENV
+
+      - name: Build with Gradle
+        env:
+          # We pass the NDK path to Gradle so the internal Rust tasks can find it
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: |
+          chmod +x gradlew
+          ./gradlew installDist
+
+      # Since signal-cli doesn't always package the Android .so into the zip by default,
+      # we manually ensure the native library is inside the final JAR.
+      - name: Package for Termux
+        run: |
+          # 1. Build the native lib manually if Gradle skipped it
+          git clone https://github.com/signalapp/libsignal.git
+          cd libsignal/java
+          cargo ndk -t ${{ matrix.target }} build --release -p libsignal-jni
+          cp ../target/${{ matrix.target }}/release/libsignal_jni.so ../../../libsignal_jni.so
+          cd ../../../
+
+          # 2. Inject into the client jar
+          JAR_FILE=$(ls build/install/signal-cli/lib/libsignal-client-*.jar | head -n 1)
+          zip -uj "$JAR_FILE" libsignal_jni.so
+
+          # 3. Create the final tarball
+          cd build/install
+          tar -czf ../../signal-cli-termux.tar.gz signal-cli/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-armv7
+          path: signal-cli-termux.tar.gz
     strategy:
       matrix:
         # armv7 for your 'armv8l'; aarch64 for 64-bit devices
