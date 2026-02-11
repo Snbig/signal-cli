@@ -1,0 +1,65 @@
+name: Build signal-cli for Termux
+on: [push, workflow_dispatch]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # armv7 handles 'armv8l' (32-bit); aarch64 is for standard 64-bit Termux
+        target: [armv7-linux-androideabi, aarch64-linux-android]
+    
+    steps:
+      - name: Checkout signal-cli
+        uses: actions/checkout@v4
+        with:
+          repository: AsamK/signal-cli
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+        with:
+          target: ${{ matrix.target }}
+
+      - name: Install Android NDK
+        run: |
+          ANDROID_NDK_VERSION=r26b
+          wget https://dl.google.com/android/repository/android-ndk-${ANDROID_NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${ANDROID_NDK_VERSION}-linux.zip
+          echo "ANDROID_NDK_HOME=$(pwd)/android-ndk-${ANDROID_NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Build libsignal-client
+        run: |
+          # signal-cli usually pins a specific version of libsignal-client
+          # We fetch the native source to compile it for Android
+          git clone https://github.com/signalapp/libsignal.git
+          cd libsignal/java
+          cargo install cargo-ndk
+          cargo ndk -t ${{ matrix.target }} build --release -p libsignal-jni
+          cp ../target/${{ matrix.target }}/release/libsignal_jni.so ../../libsignal_jni.so
+
+      - name: Build signal-cli and Bundle Native Lib
+        run: |
+          ./gradlew build
+          ./gradlew installDist
+          
+          # Inject the native library into the jar
+          # Identify the jar file name (version varies)
+          JAR_FILE=$(ls build/install/signal-cli/lib/libsignal-client-*.jar)
+          zip -uj "$JAR_FILE" libsignal_jni.so
+          
+          # Package the final distribution
+          cd build/install
+          tar -czf ../../signal-cli-termux-${{ matrix.target }}.tar.gz signal-cli/
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signal-cli-${{ matrix.target }}
+          path: signal-cli-termux-${{ matrix.target }}.tar.gz
